@@ -1,20 +1,25 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/Big-Kotik/ivt-pull-api/pkg/api"
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"io"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/grpclog"
 	"log"
+	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
 )
 
 func main() {
+	//runServer()
 	botToken := os.Getenv("TELEGRAM_API_TOKEN")
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Panic(err)
+		log.Println(err)
 	}
 
 	bot.Debug = true
@@ -24,56 +29,105 @@ func main() {
 	updates := bot.GetUpdatesChan(updateConfig)
 
 	for update := range updates {
-		if update.Message != nil { // If we got a message
+		if update.Message != nil {
 			log.Printf("[%s]", update.Message.From.UserName)
 			if update.Message.Document != nil {
 				fileId := update.Message.Document.FileID
 				log.Printf("[%s] %s", fileId, update.Message.Document.FileName)
 				file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileId})
 				if err != nil {
-					log.Panic(err)
+					log.Println(err)
 				}
 
 				fileLink := file.Link(botToken)
 				log.Printf("%s", fileLink)
 
-				savedFileName, err := DownloadFile(fileLink)
+				requestsWrapper, err := parse(fileLink)
 				if err != nil {
-					panic(err)
+					log.Println(err)
 				}
 
-				log.Printf("Saved file name: %s", savedFileName)
+				log.Printf("RequestsWrapper: %s", requestsWrapper.Data)
+
+				for _, requestWrapper := range requestsWrapper.Data {
+					log.Printf("Next request: \n Url: %s \n Method: %s \n Body: %s \n Headers: %s \n ", requestWrapper.Method, requestWrapper.Url, requestWrapper.Body, requestWrapper.Headers)
+
+				}
+				resendRequest(requestsWrapper)
 			}
 		}
 	}
 }
 
-func DownloadFile(link string) (string, error) {
-	fileURL, err := url.Parse(link)
+func runServer() {
+	lis, err := net.Listen("tcp", ":8080")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalln("Failed to listen:", err)
 	}
-	path := fileURL.Path
-	segments := strings.Split(path, "/")
-	fileName := segments[len(segments)-1]
 
-	file, err := os.Create(fileName)
+	// Create a gRPC server object
+	s := grpc.NewServer()
+
+	go func() {
+		log.Fatalln(s.Serve(lis))
+	}()
+}
+
+func resendRequest(requestsWrapper RequestsWrapper) error {
+	conn, err := grpc.Dial("0.0.0.0:8080", grpc.WithInsecure())
 	if err != nil {
-		return "", err
+		grpclog.Fatalf("fail to dial: %v", err)
 	}
+	defer conn.Close()
+
+	client := api.NewPullerClient(conn)
+
+	requests := make([]*api.HttpRequestsWrapper_Request, 0)
+	for _, rd := range requestsWrapper.Data { // todo rename
+		headers := make(map[string]*api.Header, 0)
+		for key, value := range rd.Headers {
+			headers[key] = &api.Header{Keys: value}
+		}
+
+		requests = append(requests, &api.HttpRequestsWrapper_Request{
+			Url:     rd.Url,
+			Body:    rd.Body,
+			Headers: headers,
+			Method:  rd.Method,
+		})
+	}
+
+	request := &api.HttpRequestsWrapper{
+		Requests: requests,
+	}
+
+	response, err := client.PullResource(context.Background(), request)
+
+	if err != nil {
+		grpclog.Fatalf("fail to dial: %v", err)
+	}
+
+	fmt.Println(response.Context())
+	return nil
+}
+
+func parse(link string) (RequestsWrapper, error) {
+	var requests RequestsWrapper
 
 	client := http.Client{}
 
 	resp, err := client.Get(link)
 	if err != nil {
-		return "", err
+		return requests, err
 	}
 	defer resp.Body.Close()
 
-	size, err := io.Copy(file, resp.Body)
+	decoder := json.NewDecoder(resp.Body)
 
-	defer file.Close()
+	err = decoder.Decode(&requests)
+	if err != nil {
+		return requests, err
+	}
 
-	log.Printf("Downloaded a file %s with size %d", fileName, size)
-	return fileName, nil
+	return requests, nil
 }
