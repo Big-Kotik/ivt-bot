@@ -1,0 +1,3 @@
+[submodule "ivt-pull-api"]
+	path = ivt-pull-api
+	url = git@github.com:Big-Kotik/ivt-pull-api.git
