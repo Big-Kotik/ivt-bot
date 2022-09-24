@@ -31,7 +31,7 @@ func main() {
 
 	for update := range updates {
 		if update.Message != nil {
-			log.Printf("[%s]", update.Message.From.UserName)
+			log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
 			if update.Message.Document != nil {
 				fileId := update.Message.Document.FileID
 				log.Printf("[%s] %s", fileId, update.Message.Document.FileName)
@@ -50,18 +50,40 @@ func main() {
 
 				log.Printf("RequestsWrapper: %s", requestsWrapper.Data)
 
-				for _, requestWrapper := range requestsWrapper.Data {
-					log.Printf("Next request: \n Url: %s \n Method: %s \n Body: %s \n Headers: %s \n ", requestWrapper.Method, requestWrapper.Url, requestWrapper.Body, requestWrapper.Headers)
+				logPrintRequestsWrapper(requestsWrapper)
 
+				response, err := resendRequest(requestsWrapper)
+
+				for {
+					resp, err := response.Recv()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						log.Printf("fail to dial: %v", err)
+						break
+					}
+
+					makeResponse(resp, update.Message, bot)
+					log.Printf("Body: %s", string(resp.Body))
 				}
-				resendRequest(requestsWrapper, update.Message, bot)
 			}
 		}
 	}
 }
 
-func resendRequest(requestsWrapper RequestsWrapper, message *tgbotapi.Message, bot *tgbotapi.BotAPI) error {
-	conn, err := grpc.Dial("0.0.0.0:7272", grpc.WithInsecure())
+func logPrintRequestsWrapper(wrapper RequestsWrapper) { // optional function for understand what's going on
+	for _, requestWrapper := range wrapper.Data {
+		log.Printf("Next request: \n "+
+			"Url: %s \n"+
+			"Method: %s \n"+
+			"Body: %s \n"+
+			"Headers: %s \n ", requestWrapper.Method, requestWrapper.Url, requestWrapper.Body, requestWrapper.Headers)
+	}
+}
+
+func resendRequest(requestsWrapper RequestsWrapper) (api.Puller_PullResourceClient, error) { // todo think about errors
+	conn, err := grpc.Dial("0.0.0.0:7272", grpc.WithInsecure()) // todo think about deprecated
 	if err != nil {
 		grpclog.Fatalf("fail to dial: %v", err)
 	}
@@ -69,6 +91,17 @@ func resendRequest(requestsWrapper RequestsWrapper, message *tgbotapi.Message, b
 
 	client := api.NewPullerClient(conn)
 
+	request := createRequest(requestsWrapper)
+
+	response, err := client.PullResource(context.Background(), request)
+	if err != nil {
+		log.Println(err)
+	}
+
+	return response, nil
+}
+
+func createRequest(requestsWrapper RequestsWrapper) *api.HttpRequestsWrapper {
 	requests := make([]*api.HttpRequestsWrapper_Request, 0)
 	for _, rd := range requestsWrapper.Data { // todo rename
 		headers := make(map[string]*api.Header, 0)
@@ -87,43 +120,48 @@ func resendRequest(requestsWrapper RequestsWrapper, message *tgbotapi.Message, b
 	request := &api.HttpRequestsWrapper{
 		Requests: requests,
 	}
-
-	response, err := client.PullResource(context.Background(), request)
-
-	for {
-		resp, err := response.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			log.Printf("fail to dial: %v", err)
-			break
-		}
-
-		makeResponse(resp, message, bot)
-		log.Printf("Body: %s", string(resp.Body))
-	}
-
-	return nil
+	return request
 }
 
 func makeResponse(response *api.Response, message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
 	chatId := message.Chat.ID
 	userName := message.From.UserName
-	t := time.Now()
-	fileName := userName + "_" + t.Format("2006-01-02_15-04-05_") + "*.json"
+	fileName := userName + "_" + time.Now().Format("2006-01-02_15-04-05_") + "*.json"
 	log.Printf("File name: %s", fileName)
 
-	dirName, err := os.MkdirTemp("", userName)
+	dirName, err := os.MkdirTemp("", userName) // create temp directory
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	tempFile, err := os.CreateTemp(dirName, fileName)
+	tempFile, err := os.CreateTemp(dirName, fileName) // create temp file
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	content, err := json.Marshal(createResponse(response))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if _, err := tempFile.Write(content); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("File name: %s, dir name: %s", tempFile.Name(), dirName)
+	msg := tgbotapi.NewDocument(chatId, tgbotapi.FilePath(tempFile.Name()))
+	_, err = bot.Send(msg)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	tempFile.Close() // I don't use defer because he don't delete files
+	os.Remove(tempFile.Name())
+	os.RemoveAll(dirName)
+}
+
+func createResponse(response *api.Response) *ResponseWrapper {
 	headers := make(map[string][]string, 0)
 	for key, value := range response.Header {
 		headers[key] = value.Keys
@@ -133,24 +171,7 @@ func makeResponse(response *api.Response, message *tgbotapi.Message, bot *tgbota
 		Headers: headers,
 	}
 
-	content, err := json.Marshal(responseWrapper)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	if _, err := tempFile.Write(content); err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("File name: %s, dir name: %s", tempFile.Name(), dirName)
-	msg := tgbotapi.NewDocument(chatId, tgbotapi.FilePath(tempFile.Name()))
-	_, err = bot.Send(msg)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-	tempFile.Close()
-	os.Remove(tempFile.Name())
-	os.RemoveAll(dirName)
+	return responseWrapper
 }
 
 func parse(link string) (RequestsWrapper, error) {
