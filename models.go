@@ -10,3 +10,8 @@ type RequestWrapper struct {
 type RequestsWrapper struct {
 	Data []RequestWrapper `json:"data"`
 }
+
+type ResponseWrapper struct {
+	Body    string              `json:"body"`
+	Headers map[string][]string `json:"headers"`
+}

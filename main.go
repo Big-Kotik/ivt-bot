@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/Big-Kotik/ivt-pull-api/pkg/api"
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"google.golang.org/grpc"
@@ -12,10 +13,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
-	//runServer()
 	botToken := os.Getenv("TELEGRAM_API_TOKEN")
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
@@ -53,13 +54,13 @@ func main() {
 					log.Printf("Next request: \n Url: %s \n Method: %s \n Body: %s \n Headers: %s \n ", requestWrapper.Method, requestWrapper.Url, requestWrapper.Body, requestWrapper.Headers)
 
 				}
-				resendRequest(requestsWrapper)
+				resendRequest(requestsWrapper, update.Message, bot)
 			}
 		}
 	}
 }
 
-func resendRequest(requestsWrapper RequestsWrapper) error {
+func resendRequest(requestsWrapper RequestsWrapper, message *tgbotapi.Message, bot *tgbotapi.BotAPI) error {
 	conn, err := grpc.Dial("0.0.0.0:7272", grpc.WithInsecure())
 	if err != nil {
 		grpclog.Fatalf("fail to dial: %v", err)
@@ -98,13 +99,58 @@ func resendRequest(requestsWrapper RequestsWrapper) error {
 			log.Printf("fail to dial: %v", err)
 			break
 		}
+
+		makeResponse(resp, message, bot)
 		log.Printf("Body: %s", string(resp.Body))
 	}
 
-	if err != nil {
-		grpclog.Fatalf("fail to dial: %v", err)
-	}
 	return nil
+}
+
+func makeResponse(response *api.Response, message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
+	chatId := message.Chat.ID
+	userName := message.From.UserName
+	t := time.Now()
+	fileName := userName + "_" + t.Format("2006-01-02_15-04-05_") + "*.json"
+	log.Printf("File name: %s", fileName)
+
+	dirName, err := os.MkdirTemp("", userName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tempFile, err := os.CreateTemp(dirName, fileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	headers := make(map[string][]string, 0)
+	for key, value := range response.Header {
+		headers[key] = value.Keys
+	}
+	responseWrapper := &ResponseWrapper{
+		Body:    string(response.Body),
+		Headers: headers,
+	}
+
+	content, err := json.Marshal(responseWrapper)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	if _, err := tempFile.Write(content); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("File name: %s, dir name: %s", tempFile.Name(), dirName)
+	msg := tgbotapi.NewDocument(chatId, tgbotapi.FilePath(tempFile.Name()))
+	_, err = bot.Send(msg)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	tempFile.Close()
+	os.Remove(tempFile.Name())
+	os.RemoveAll(dirName)
 }
 
 func parse(link string) (RequestsWrapper, error) {
