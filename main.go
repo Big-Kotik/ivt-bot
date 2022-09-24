@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/Big-Kotik/ivt-pull-api/pkg/api"
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 )
@@ -59,22 +59,8 @@ func main() {
 	}
 }
 
-func runServer() {
-	lis, err := net.Listen("tcp", ":8080")
-	if err != nil {
-		log.Fatalln("Failed to listen:", err)
-	}
-
-	// Create a gRPC server object
-	s := grpc.NewServer()
-
-	go func() {
-		log.Fatalln(s.Serve(lis))
-	}()
-}
-
 func resendRequest(requestsWrapper RequestsWrapper) error {
-	conn, err := grpc.Dial("0.0.0.0:8080", grpc.WithInsecure())
+	conn, err := grpc.Dial("0.0.0.0:7272", grpc.WithInsecure())
 	if err != nil {
 		grpclog.Fatalf("fail to dial: %v", err)
 	}
@@ -103,11 +89,21 @@ func resendRequest(requestsWrapper RequestsWrapper) error {
 
 	response, err := client.PullResource(context.Background(), request)
 
+	for {
+		resp, err := response.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			log.Printf("fail to dial: %v", err)
+			break
+		}
+		log.Printf("Body: %s", string(resp.Body))
+	}
+
 	if err != nil {
 		grpclog.Fatalf("fail to dial: %v", err)
 	}
-
-	fmt.Println(response.Context())
 	return nil
 }
 
