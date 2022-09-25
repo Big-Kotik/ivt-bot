@@ -52,7 +52,12 @@ func main() {
 
 				logPrintRequestsWrapper(requestsWrapper)
 
-				response, err := resendRequest(requestsWrapper)
+				conn, err := grpc.Dial("0.0.0.0:7272", grpc.WithInsecure()) // todo think about deprecated
+				if err != nil {
+					grpclog.Fatalf("fail to dial: %v", err)
+				}
+
+				response, err := resendRequest(requestsWrapper, conn)
 
 				for {
 					resp, err := response.Recv()
@@ -67,6 +72,8 @@ func main() {
 					makeResponse(resp, update.Message, bot)
 					log.Printf("Body: %s", string(resp.Body))
 				}
+
+				conn.Close()
 			}
 		}
 	}
@@ -78,19 +85,14 @@ func logPrintRequestsWrapper(wrapper RequestsWrapper) { // optional function for
 			"Url: %s \n"+
 			"Method: %s \n"+
 			"Body: %s \n"+
-			"Headers: %s \n ", requestWrapper.Method, requestWrapper.Url, requestWrapper.Body, requestWrapper.Headers)
+			"Headers: %s \n", requestWrapper.Method, requestWrapper.Url, requestWrapper.Body, requestWrapper.Headers)
 	}
 }
 
-func resendRequest(requestsWrapper RequestsWrapper) (api.Puller_PullResourceClient, error) { // todo think about errors
-	conn, err := grpc.Dial("0.0.0.0:7272", grpc.WithInsecure()) // todo think about deprecated
-	if err != nil {
-		grpclog.Fatalf("fail to dial: %v", err)
-	}
-	defer conn.Close()
+func resendRequest(requestsWrapper RequestsWrapper,
+	conn *grpc.ClientConn) (api.Puller_PullResourceClient, error) { // todo think about errors
 
 	client := api.NewPullerClient(conn)
-
 	request := createRequest(requestsWrapper)
 
 	response, err := client.PullResource(context.Background(), request)
@@ -111,7 +113,7 @@ func createRequest(requestsWrapper RequestsWrapper) *api.HttpRequestsWrapper {
 
 		requests = append(requests, &api.HttpRequestsWrapper_Request{
 			Url:     rd.Url,
-			Body:    rd.Body,
+			Body:    string(rd.Body), // TODO!!!! change to []byte in server
 			Headers: headers,
 			Method:  rd.Method,
 		})
@@ -167,7 +169,7 @@ func createResponse(response *api.Response) *ResponseWrapper {
 		headers[key] = value.Keys
 	}
 	responseWrapper := &ResponseWrapper{
-		Body:    string(response.Body),
+		Body:    response.Body,
 		Headers: headers,
 	}
 

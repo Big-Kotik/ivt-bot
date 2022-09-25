@@ -3,7 +3,7 @@ package main
 type RequestWrapper struct {
 	Url     string              `json:"url"`
 	Method  string              `json:"method"`
-	Body    string              `json:"body"`
+	Body    []byte              `json:"body"`
 	Headers map[string][]string `json:"headers"`
 }
 
@@ -12,6 +12,6 @@ type RequestsWrapper struct {
 }
 
 type ResponseWrapper struct {
-	Body    string              `json:"body"`
+	Body    []byte              `json:"body"`
 	Headers map[string][]string `json:"headers"`
 }
