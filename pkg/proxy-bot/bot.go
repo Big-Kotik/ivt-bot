@@ -86,6 +86,9 @@ func (b *ProxyBot) Listen() {
 
 			if err != nil {
 				fmt.Printf("err != nil: %s", err.Error())
+				b.sendResponse(update.Message.Chat.ID, &api.HttpResponse{
+					StatusCode: 408,
+				})
 				break
 			}
 
@@ -126,11 +129,13 @@ func newGrpcRequests(rs *RequestsWrapper) *api.HttpRequests {
 			headers[k] = &api.Header{Keys: h}
 		}
 
+		uuid, _ := req.Uuid.MarshalBinary()
 		grpcRequests.Requests = append(grpcRequests.Requests, &api.HttpRequests_HttpRequest{
 			Url:     req.Url,
 			Method:  req.Method,
-			Body:    string(req.Body),
+			Body:    req.Body,
 			Headers: headers,
+			Uuid:    uuid,
 		})
 	}
 
@@ -160,15 +165,20 @@ func (b *ProxyBot) sendResponse(chatId int64, resp *api.HttpResponse) error {
 
 	uid, _ := uuid.FromBytes(resp.Uuid)
 
-	content, err := json.Marshal(ResponseWrapper{
-		StatusCode:    resp.StatusCode,
-		ProtoMajor:    resp.ProtoMajor,
-		ProtoMinor:    resp.ProtoMinor,
-		Header:        headers,
-		Body:          resp.Body,
-		ContentLength: resp.ContentLength,
-		Uuid:          uid,
-	})
+	content, err := json.Marshal(
+		ResponsesWrapper{
+			Data: []ResponseWrapper{
+				ResponseWrapper{
+					StatusCode:    resp.StatusCode,
+					ProtoMajor:    resp.ProtoMajor,
+					ProtoMinor:    resp.ProtoMinor,
+					Header:        headers,
+					Body:          resp.Body,
+					ContentLength: resp.ContentLength,
+					Uuid:          uid,
+				},
+			},
+		})
 
 	if err != nil {
 		b.logger.Printf("can't marshal response - %s", err.Error())

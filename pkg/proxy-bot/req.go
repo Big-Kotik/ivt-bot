@@ -23,3 +23,7 @@ type ResponseWrapper struct {
 	Body          []byte              `json:"body"`
 	ContentLength int64               `json:"contentLength"`
 }
+
+type ResponsesWrapper struct {
+	Data []ResponseWrapper `json:"data"`
+}
