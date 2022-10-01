@@ -1,4 +1,4 @@
-module ivt-bot
+module github.com/Big-Kotik/ivt-bot
 
 go 1.18
 
